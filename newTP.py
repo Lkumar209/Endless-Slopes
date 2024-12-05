@@ -2,6 +2,8 @@ from cmu_graphics import *
 import math
 import random
 import time
+from mountains import Mountains
+
 
 class Weather:
     def __init__(self, width, height):
@@ -43,7 +45,7 @@ class Weather:
         self.nightColor = rgb(50, 50, 100)    
         self.sunsetColor = rgb(255, 150, 50)  
         self.horizonColor = rgb(220, 240, 255)  
-        
+    #got this from outside article on linear interpolation
     def lerp(self, start, end, t):
         return start + (end - start) * t
     
@@ -99,6 +101,7 @@ class Weather:
             self.raindrops = [drop for drop in self.raindrops if drop[1] < self.height]
     
     def updateClouds(self, velocity_x):
+        
         for cloud in self.clouds:
             cloud[0] -= self.cloudSpeeds[cloud[4]] * velocity_x
             if cloud[0] + cloud[2] < 0:
@@ -217,6 +220,7 @@ class OptimizedSnowboardingGame:
         
         self.width = width
         self.height = height
+        self.mountains = Mountains(width, height)
         
         
         self.seed = random.randint(0, 10000)
@@ -233,9 +237,6 @@ class OptimizedSnowboardingGame:
         self.tree_chance = 0.5
         self.last_tree_x = 0  
 
-
-        
-        
         self.sky_color = rgb(135, 206, 235)
         self.terrain_base = rgb(255, 255, 255)  
         self.terrain_shadow = rgb(230, 230, 230)  
@@ -243,16 +244,14 @@ class OptimizedSnowboardingGame:
         self.weather = Weather(width, height)
         self.screens = Screens(width, height, self)
         self.currentScreen = 'start'
-
-        
-        
+    
         self.init_game_state()
-        
-        
         self.terrain = self.generate_terrain(0, self.terrain_width)
-
-        
-        
+        self.generate_trees(self.terrain)
+        self.generate_rocks(self.terrain)  
+        self.generate_coins(self.terrain)  
+        self.last_rock_x = 0
+        self.last_coin_x = 0
         self.generate_trees(self.terrain)
     
     def init_game_state(self):
@@ -262,18 +261,34 @@ class OptimizedSnowboardingGame:
         self.rider_x = 200
         self.rider_y = self.height // 3
         
-        
-        self.gravity = 0.8       
-        self.air_gravity = 0.9    
-        self.velocity_x = 32      
-        self.velocity_y = 0
-        
-        
         self.ground_friction = 0.995  
         self.air_resistance = 0.995   
         self.max_speed = 40           
         self.base_speed = 28     
+        self.velocity_x = self.base_speed      
+        self.velocity_y = 0
+
+        # self.speed_recovery_timer = 0
+        # self.speed_recovery_delay = 20  # 2 seconds at 60 FPS
+        # self.original_speed = self.base_speed
+        self.speed_recovery_timer = 0
+        self.speed_recovery_delay = 120  # 2 seconds at 60 FPS
+        self.original_speed = 28
+        self.target_speed = self.original_speed
+        self.recovery_step = 1
+
+        # self.velocity_x = 15  # Start with lower initial speed
+        # self.velocity_y = 0
+        # self.ground_friction = 0.005  # Reduced friction
+        # self.air_resistance = 0.995
+        # self.max_speed = 15
+        # self.base_speed = 15  # Lower base speed
+
         self.snap_distance = 12
+        
+        self.gravity = 0.8       
+        self.air_gravity = 0.9    
+       
         
         
         self.jump_force = -15
@@ -302,30 +317,191 @@ class OptimizedSnowboardingGame:
 
         self._rotation_cache = {}
         self._terrain_cache = {}
-        self.MAX_CACHE_SIZE = 1000
+        self.MAX_CACHE_SIZE = 500
 
         self.frame_times = []
         self.last_frame_time = time.time()
         self.fps = 0
         self.difficulty = 'easy'
+        self.rocks = []
+        self.rock_spacing = 450   
+        self.rock_chance = 0.4  # 
+        self.last_rock_x = 0
+
+        self.score = 0
+        self.flip_score = 200   
+        self.coin_score = 100
+        self.trick_score = 0
+        self.coins_collected = 0
+        self.distance_travelled = 0
         
         
         if len(self._terrain_cache) > self.MAX_CACHE_SIZE:
             self._terrain_cache.clear()
 
 
+    def generate_rocks(self, terrain):
+        start_x = self.last_rock_x
+        end_x = len(terrain) - self.rock_spacing
+        
+        while self.last_rock_x < end_x:
+            if random.random() < self.rock_chance:
+                x = self.last_rock_x
+                h1 = terrain[int(x)]
+                h2 = terrain[min(int(x + 1), len(terrain) - 1)]
+                slope = h2 - h1
+                terrain_y = self.height - terrain[int(self.last_rock_x)]
+                rock_type = random.choice(['boulder', 'pointy'])
+                self.rocks.append((rock_type, self.last_rock_x, terrain_y, False))
+            self.last_rock_x += self.rock_spacing
+    
+    def draw_rock(self, x, y, rock_type, broken):
+        """Draws rocks with proper terrain alignment"""
+        if broken:
+            pieces = [(15, -20), (-10, -15), (5, -10), (-15, -5)]
+            for dx, dy in pieces:
+                size = random.randint(10, 15)
+                drawOval(x + dx, y + dy, size, size * 0.8, fill='grey')
+        else: 
+            if rock_type == 'boulder':
+                drawOval(x - 30, y - 5, 60, 35, fill='grey')
+                drawOval(x - 25, y - 5, 50, 30, fill='darkGrey')
+                drawLine(x - 20, y - 25, x - 10, y - 20, fill='dimGrey', lineWidth=2)
+                drawLine(x + 5, y - 30, x + 15, y - 25, fill='dimGrey', lineWidth=2)
+            
+            elif rock_type == 'pointy':
+                terrain_x = x + self.camera_x
+                h1 = self.get_terrain_height(terrain_x - 1)
+                h2 = self.get_terrain_height(terrain_x + 1)
+                slope_angle = math.atan2(h2 - h1, 2) 
+                
+                rock_height = 40
+                rock_width = 25
+                
+                cos_angle = math.cos(slope_angle)
+                sin_angle = math.sin(slope_angle)
+                
+                top_x = x + rock_height * sin_angle
+                top_y = y - rock_height * cos_angle
+                
+                left_x = x - rock_width * cos_angle
+                left_y = y - rock_width * sin_angle
+                
+                right_x = x + rock_width * cos_angle
+                right_y = y + rock_width * sin_angle
+                
+                drawPolygon(top_x, top_y,    
+                        left_x, left_y,     
+                        right_x, right_y,   
+                        fill='grey')
+                
+                shadow_height = rock_height * 0.7
+                shadow_width = rock_width * 0.7
+                
+                drawPolygon(x + shadow_height * sin_angle * 0.8, 
+                        y - shadow_height * cos_angle * 0.8,
+                        x - shadow_width * cos_angle * 0.8,
+                        y - shadow_width * sin_angle * 0.8,
+                        x + shadow_width * cos_angle * 0.8,
+                        y + shadow_width * sin_angle * 0.8,
+                        fill='darkGrey')
+
+    def draw_rocks(self, camera_x):
+        for rock_type, x, y, broken in self.rocks:
+            screen_x = x - camera_x
+            if -30 <= screen_x <= self.width + 30:
+                self.draw_rock(screen_x, y, rock_type, broken)
+    
     def generate_coins(self, terrain):
         while self.last_coin_x < len(terrain) - self.coin_spacing:
-            if random.random() < 0.2:  
-                num_coins = random.randint(3, 5)  
-                base_y = self.height - terrain[int(self.last_coin_x)]
+            if random.random() < 0.3:   
+                num_coins = random.randint(3, 5)    
+                base_x = self.last_coin_x
+                
+                h1 = terrain[int(base_x)]
+                h2 = terrain[min(int(base_x + 40), len(terrain) - 1)]
+                angle = math.atan2(h2 - h1, 40)
                 
                 for i in range(num_coins):
-                    x = self.last_coin_x + i * 40  
-                    y = base_y - 50
-                    self.coins.append([x, y, True])
-            
+                    x = base_x + i * 40
+                   
+                    base_y = self.height - terrain[int(x)]
+                    offset_x = math.sin(angle) * 50
+                    offset_y = math.cos(angle) * 30
+                    
+                    self.coins.append([x, base_y - offset_y, True])
+                    
             self.last_coin_x += self.coin_spacing
+
+    def draw_coins(self, camera_x):
+        visible_start = self.camera_x - self.coin_width
+        visible_end = self.camera_x + self.width + self.coin_width
+        
+        visible_coins = [coin for coin in self.coins 
+                        if coin[2] and visible_start <= coin[0] <= visible_end]
+        
+        for coin in visible_coins:
+            screen_x = coin[0] - camera_x
+            h1 = self.get_terrain_height(coin[0] - 1)
+            h2 = self.get_terrain_height(coin[0] + 1)
+            angle = math.atan2(h2 - h1, 2)
+            
+            drawCircle(screen_x, coin[1], self.coin_width/2, fill='gold')
+            drawCircle(screen_x, coin[1], self.coin_width/3, fill='yellow')
+         
+            shine_x = screen_x - math.cos(angle) * 2
+            shine_y = coin[1] - math.sin(angle) * 2
+            drawCircle(shine_x, shine_y, 3, fill='white')
+
+    # def check_coin_collisions(self):
+    #     visible_start = self.camera_x - 50
+    #     visible_end = self.camera_x + self.width + 50
+        
+    #     for coin in self.coins:
+    #         if coin[2] and visible_start <= coin[0] <= visible_end:  # If coin exists and is visible
+    #             dx = self.rider_x - coin[0]
+    #             dy = self.rider_y - coin[1]
+    #             if dx * dx + dy * dy < 900:  # 30 * 30 collision distance
+    #                 coin[2] = False  # Collect coin
+    #                 self.score += self.coin_score
+
+    def check_coin_collisions(self):
+        for coin in self.coins:
+            if coin[2]:  # If coin exists
+                dx = self.rider_x - coin[0]
+                dy = self.rider_y - coin[1]
+                if dx * dx + dy * dy < 900:  # 30 * 30
+                    coin[2] = False
+                    self.coins_collected += 1
+
+    # def draw_coins(self, camera_x):
+    #     visible_start = self.camera_x - self.coin_width
+    #     visible_end = self.camera_x + self.width + self.coin_width
+        
+    #     visible_coins = [coin for coin in self.coins 
+    #                     if coin[2] and visible_start <= coin[0] <= visible_end]
+        
+    #     for coin in visible_coins:
+    #         screen_x = coin[0] - camera_x
+    #         drawCircle(screen_x, coin[1], self.coin_width/2, fill='gold')
+    #         drawCircle(screen_x, coin[1], self.coin_width/3, fill='yellow')
+    #         drawCircle(screen_x - 2, coin[1] - 2, 3, fill='white')
+
+    # def generate_coins(self, terrain):
+    #     start_x = self.last_coin_x
+    #     end_x = len(terrain) - self.coin_spacing
+        
+    #     while self.last_coin_x < end_x:
+    #         if random.random() < 0.2:  # 20% chance
+    #             num_coins = random.randint(3, 5)
+    #             base_y = self.height - terrain[int(self.last_coin_x)] - 50
+                
+    #             for i in range(num_coins):
+    #                 x = self.last_coin_x + i * 40
+    #                 self.coins.append([x, base_y, True])
+    #         self.last_coin_x += self.coin_spacing
+
+    
 
     def resetGame(app):
         
@@ -400,9 +576,6 @@ class OptimizedSnowboardingGame:
     
     def generate_terrain(self, start_x, width):
         terrain = [self.height / 2] * width
-        
-
-
         seed_multipliers = [
             (self.seed, 800, 150),
             (self.seed * 2, 400, 80),
@@ -416,10 +589,9 @@ class OptimizedSnowboardingGame:
                 for seed, freq, amplitude in seed_multipliers
             )
         
-        
         for i in range(1, len(terrain)):
             terrain[i] = (terrain[i] + terrain[i-1]) / 2
-        
+    
         return terrain
     
     def get_terrain_height(self, x):
@@ -457,6 +629,9 @@ class OptimizedSnowboardingGame:
             new_segment = self.generate_terrain(len(self.terrain), self.width//2) 
             self.terrain.extend(new_segment)
             self.generate_trees(self.terrain)  
+            self.generate_rocks(self.terrain)
+            self.generate_coins(self.terrain)
+        
             
     def update_physics(self):
         current_time = time.time()
@@ -490,6 +665,11 @@ class OptimizedSnowboardingGame:
             if self.flip_direction != 0:
                 self.char_angle += self.flip_speed * self.flip_direction
                 self.total_rotation += self.flip_speed * self.flip_direction
+
+                if abs(self.total_rotation) >= 2 * math.pi:
+                    self.trick_score += 200  # 200 points per flip
+                    self.score += 200
+                    self.total_rotation = 0
             
             
             if self.rider_y + self.rider_height / 2 > ground_y - self.snap_distance and self.velocity_y > 0:
@@ -532,9 +712,127 @@ class OptimizedSnowboardingGame:
             self.rider_y = ground_y - self.rider_height / 2
 
         if not self.game_over:
+            visible_start = self.camera_x - 50
+            visible_end = self.camera_x + self.width + 50
+
+            # filtered_rocks = []
+            # for rock in self.rocks:
+            #     rock_type, x, y, broken = rock
+            #     if visible_start <= x <= visible_end:
+            #         # Check slope at rock position
+            #         h1 = self.get_terrain_height(x)
+            #         h2 = self.get_terrain_height(x + 1)
+            #         slope = h2 - h1
+                    
+            #         # Keep rock only if not on uphill
+            #         if slope <= 20:
+            #             filtered_rocks.append(rock)
+            #     else:
+            #         filtered_rocks.append(rock)
+                    
+            # self.rocks = filtered_rocks
             
-            visible_start = self.camera_x - 100
-            visible_end = self.camera_x + self.width + 100
+            for rock_type, x, y, broken in self.rocks:
+                if not broken and visible_start <= x <= visible_end:
+                    dx = self.rider_x - x
+                    dy = self.rider_y - y
+                    collision_distance = 30
+
+                    if dx * dx + dy * dy < collision_distance * collision_distance:
+                        if self.velocity_x <= 16:
+                            self.game_over = True
+                            self.rider_y = ground_y - self.rider_height / 2
+                            break   
+                        
+                        rock_index = self.rocks.index((rock_type, x, y, broken))
+                        self.rocks[rock_index] = (rock_type, x, y, True)
+                        
+                        self.velocity_x = max(13, self.velocity_x * 0.5)  # Reduce current speed
+                        self.max_speed = self.velocity_x
+                        self.base_speed = self.velocity_x
+                        self.velocity_y *= 0.3
+                        
+                        self.speed_recovery_timer = 60
+                        self.recovery_step = (28 - self.velocity_x) / 60
+
+            if self.speed_recovery_timer > 0:
+                self.speed_recovery_timer -= 1
+                self.velocity_x = min(self.velocity_x + self.recovery_step, 28)
+                self.max_speed = self.velocity_x
+                self.base_speed = self.velocity_x
+        # if not self.game_over:
+        #     visible_start = self.camera_x - 100
+        #     visible_end = self.camera_x + self.width + 100
+            
+        #     for rock_type, x, y, broken in self.rocks:
+        #         if not broken and visible_start <= x <= visible_end:
+        #             dx = self.rider_x - x
+        #             dy = self.rider_y - y
+        #             collision_distance = 30
+
+        #             # In rock collision section
+
+        #             if dx * dx + dy * dy < collision_distance * collision_distance:
+        #                 # Mark rock as broken
+        #                 rock_index = self.rocks.index((rock_type, x, y, broken))
+        #                 self.rocks[rock_index] = (rock_type, x, y, True)
+                        
+        #                 # Reduce speed
+        #                 self.velocity_x = 13  # Set to minimum speed
+        #                 self.max_speed = 13  # Temporarily reduce max speed
+        #                 self.base_speed = 13  # Temporarily reduce base speed
+        #                 self.velocity_y *= 0.3
+        #                 self.speed_recovery_timer = 60  # Set recovery time (1 second at 60 FPS)
+        #                 self.recovery_step = (28 - 13) / 60  # Calculate step size for gradual recovery
+
+        #                 if self.velocity_x <= 12:
+        #                     self.game_over = True  # Trigger game over state
+        #                     self.rider_y = ground_y - self.rider_height / 2  # Set rider on ground
+
+        #             # Add this after collision checks
+        #             if self.speed_recovery_timer > 0:
+        #                 self.speed_recovery_timer -= 1
+        #                 # Gradually increase speed
+        #                 self.velocity_x = min(self.velocity_x + self.recovery_step, 28)
+        #                 self.max_speed = self.velocity_x
+        #                 self.base_speed = self.velocity_x
+                    # if dx * dx + dy * dy < collision_distance * collision_distance:
+                    #     # Mark rock as broken
+                    #     rock_index = self.rocks.index((rock_type, x, y, broken))
+                    #     self.rocks[rock_index] = (rock_type, x, y, True)
+                        
+                    #     # Reduce speed
+                    #     # self.velocity_x *= 0.3
+                    #     self.max_speed = max(15, self.max_speed * 0.7)  # Reduce max speed
+                    #     self.base_speed = max(15, self.base_speed * 0.7)  # Reduce base speed
+                    #     self.velocity_x = max(self.base_speed, self.velocity_x * 0.3)
+                    #     self.velocity_y *= 0.3
+                    #     self.speed_recovery_timer = self.speed_recovery_delay
+
+                    # # Add this after collision checks
+                    # if self.speed_recovery_timer > 0:
+                    #     self.speed_recovery_timer -= 1
+                    #     if self.speed_recovery_timer == 0:
+                    #         # Restore original speed
+                    #         self.velocity_x = self.original_speed
+                    #         self.base_speed = self.original_speed
+                    #         self.max_speed = 40
+                    
+                    # if dx * dx + dy * dy < collision_distance * collision_distance:
+                    #     # Mark rock as broken
+                    #     rock_index = self.rocks.index((rock_type, x, y, broken))
+                    #     self.rocks[rock_index] = (rock_type, x, y, True)
+                        
+                    #     # Significantly reduce speed
+                    #     # self.velocity_x = max(self.base_speed, self.velocity_x * 0.3)  # Reduce to 30% of current speed
+                    #     # self.velocity_y *= 0.3
+                    #     self.max_speed = max(15, self.max_speed * 0.7)  # Reduce max speed
+                    #     self.base_speed = max(15, self.base_speed * 0.7)  # Reduce base speed
+                    #     self.velocity_x = max(self.base_speed, self.velocity_x * 0.3)
+                    #     self.velocity_y *= 0.3
+                        
+                    #     # Reset max speed temporarily
+                    #     self.max_speed = max(self.base_speed, self.velocity_x)
             
             
             nearby_coins = [coin for coin in self.coins 
@@ -547,7 +845,8 @@ class OptimizedSnowboardingGame:
                 
                 if dx * dx + dy * dy < (self.coin_width * 1.5) ** 2:
                     coin[2] = False
-                    self.score += 10
+                    self.score += 100
+                    self.coins_collected += 1
 
         self.extend_terrain()
         self.weather.updateDayNightCycle()
@@ -592,12 +891,14 @@ class OptimizedSnowboardingGame:
                 self.currentScreen = 'menu'
         
         elif self.currentScreen == 'crash':
-            if (buttonX <= mouseX <= buttonX + 300 and 400 <= mouseY <= 460):
+            if (450 <= mouseX <= 750  and 500 <= mouseY <= 560):
                 self.currentScreen = 'start'
                 self.init_game_state()  
                 self.game_over = False  
             elif (buttonX <= mouseX <= buttonX + 300 and 480 <= mouseY <= 540):
                 pass 
+    
+
 
     def draw(self):
         if self.currentScreen == 'start':
@@ -611,10 +912,10 @@ class OptimizedSnowboardingGame:
         elif self.currentScreen == 'crash':
             self.screens.drawCrashScreen(self.score)
         else:
-            
             drawRect(0, 0, self.width, self.height, fill=self.sky_color)
             self.weather.draw()
-            
+            self.draw_rocks(self.camera_x)  # Draw the rocks before trees
+            self.draw_trees(self.camera_x)
             
             start_x = int(self.camera_x)
             end_x = min(start_x + self.width + 1, len(self.terrain))
@@ -650,22 +951,16 @@ class OptimizedSnowboardingGame:
             
             
             camera_offset = self.camera_x
-            coin_half_width = self.coin_width / 2
-            coin_half_height = self.coin_height / 2
             
             
             visible_coins = [coin for coin in self.coins 
                             if coin[2] and visible_start <= coin[0] <= visible_end]
-            
             for coin in visible_coins:
                 screen_x = coin[0] - camera_offset
-                drawImage('coin.png',
-                        screen_x - coin_half_width,
-                        coin[1] - coin_half_height,
-                        width=self.coin_width,
-                        height=self.coin_height)
-            
-            self.draw_trees(self.camera_x)
+                # Draw coin using shapes
+                drawCircle(screen_x, coin[1], self.coin_width/2, fill='gold')
+                drawCircle(screen_x, coin[1], self.coin_width/3, fill='yellow')
+                drawCircle(screen_x - 2, coin[1] - 2, 3, fill='white')
             
             
             screen_x = self.rider_x - self.camera_x
@@ -676,16 +971,42 @@ class OptimizedSnowboardingGame:
                     height=self.rider_height,
                     rotateAngle=math.degrees(self.char_angle))
             
-            drawLabel(f'FPS: {self.fps}', 50, 20, 
-                size=16, bold=True, fill='white')
+            # drawLabel(f'FPS: {self.fps}', 50, 20, 
+            #     size=16, bold=True, fill='black')
+
+            # drawLabel(f'Speed: {int(self.velocity_x)}', 50, 40, 
+            #  size=16, bold=True, fill='black')
             
+            # drawLabel(f'Score: {self.score}', 150, 20, size=16, bold = True, fill='black')
+            
+            top_margin = 10
+            stats_y = top_margin
+            text_color = 'white'
+
+            drawRect(0, 0, self.width, top_margin * 2, 
+                    fill=rgb(0, 0, 0), opacity=30)
+
+            drawLabel(f'{self.fps} FPS', 80, stats_y, 
+                    size=20, bold=True, fill=text_color)
+
+            drawLabel(f'{int(self.velocity_x)} KM/H', 240, stats_y, 
+                    size=20, bold=True, fill=text_color)
+
+            drawLabel(f'Score: {self.score}', 400, stats_y, 
+                    size=20, bold=True, fill=text_color)
+
+            drawCircle(520, stats_y, 10, fill='gold')
+            drawCircle(520, stats_y, 7, fill='yellow')
+            drawLabel(f'x {self.coins_collected}', 560, stats_y, 
+                    size=20, bold=True, fill=text_color)
             if self.game_over:
+                gameOverColor =  rgb(147, 189, 182)
+        
                 drawRect(0, 0, self.width, self.height,
-                        fill='black', opacity=50)
-                drawLabel('GAME OVER', self.width/2, self.height/2,
-                        size=64, bold=True, fill='white')
-                drawLabel('Press E to Exit', self.width/2, self.height/2 + 80,
-                        size=32, fill='white')
+                        fill=gameOverColor, opacity=30)
+                drawLabel('Uh Oh! You crashed.. Press E to Exit', self.width/2, self.height/2 - 100,
+                        size=40, font='sacramento', bold=True, fill='black')
+               
 
 
 
@@ -836,7 +1157,7 @@ class Screens:
             drawPolygon(x, self.height, x+20, 750, x+40, self.height, 
                     fill='darkGreen')
         
-        
+        #learned about hasattr from w3 schools
         if not hasattr(self, 'snowflakes'):
             self.snowflakes = []
             for _ in range(100):
@@ -946,7 +1267,7 @@ class Screens:
         for x in range(-20, self.width + 20, 40):
             drawPolygon(x, self.height, x+20, self.height-50, x+40, self.height, 
                     fill='darkGreen')
-        
+        #learned hasaatr from w3 schools
         if not hasattr(self, 'snowflakes'):
             self.snowflakes = []
             for _ in range(100):
@@ -970,28 +1291,56 @@ class Screens:
         drawRect(0, 0, self.width, self.height, fill=skyColor)
         
         
-        drawLabel('GAME OVER', self.width//2, 150, 
-                size=100, bold=True, fill='white')
+        # drawLabel('GAME OVER', self.width//2, 150, 
+        #         size=100, bold=True, fill='white')
+        
+        drawLabel('Your Score', self.width//2, 150, 
+                size=40, fill='white', align='center', bold=True)
         
         
-        drawLabel(f'Your Score: {score}', self.width//2, 300, 
-                size=40, fill='white')
+        # drawLabel(f'Your Score: {score}', self.width//2, 300, 
+        #         size=40, fill='white')
         
+        trick_score = self.game.trick_score
+        coins_collected = self.game.coins_collected
         
+        items = [
+            ('Trick score', f'{trick_score}'),
+            ('Coins collected', f'{coins_collected} x 100'),
+        ]
+
+        start_y = 250
+        spacing = 50
+        left_x = self.width//2 - 200
+        right_x = self.width//2 + 200
+
+        y = start_y
+        for item in items:
+            label, value = item
+            drawLabel(label, left_x, y, size=24, fill='white', align='left', bold=True)
+            drawLabel(value, right_x, y, size=24, fill='white', align='right', bold=True)
+            y += spacing
+        
+        total =  trick_score + (coins_collected * 100)
+        y = start_y + (len(items) + 1) * spacing
+
+        drawLine(left_x, y - 20, right_x, y - 20, fill='white', opacity=50)
+        
+        drawLabel('Total', left_x, y, size=30, fill='white', align='left', bold=True)
+        drawLabel(str(total), right_x, y, size=30, fill='white', align='right', bold=True)
         buttonWidth = 300
         buttonHeight = 60
         buttonX = self.width//2 - buttonWidth//2
         
         
-        drawRect(buttonX, 400, buttonWidth, buttonHeight, 
-                fill=None, border='white', borderWidth=3)
-        drawLabel('START AGAIN', self.width//2, 430, 
+        drawRect(buttonX, 500, buttonWidth, buttonHeight, 
+        fill=None, border='white', borderWidth=3)
+        drawLabel('START AGAIN', self.width//2, 530, 
                 size=32, bold=True, fill='white')
-        
-        
-        drawRect(buttonX, 480, buttonWidth, buttonHeight, 
+
+        drawRect(buttonX, 580, buttonWidth, buttonHeight, 
                 fill=None, border='white', borderWidth=3)
-        drawLabel('QUIT', self.width//2, 510, 
+        drawLabel('QUIT', self.width//2, 610, 
                 size=32, bold=True, fill='white')
         
         
@@ -1071,10 +1420,14 @@ class Screens:
             
             drawCircle(snowflake[0], snowflake[1], 2, fill='white')
 
+
 def onAppStart(app):
+    # app.mountains = Mountains(app.width, app.height)
     app.game = OptimizedSnowboardingGame(app.width, app.height)
 
+
 def onStep(app):
+    # app.mountains.update()
     if not app.game.game_over:  
         app.game.update_physics()
 
@@ -1090,10 +1443,14 @@ def onMousePress(app, mouseX, mouseY):
     app.game.handleScreenClick(mouseX, mouseY)
 
 def redrawAll(app):
+    # app.mountains.draw()
+    # app.mountains.update()
     app.game.draw()
 
 
+
 runApp(width=1200, height=800)
+
 
 
 '''
