@@ -1,7 +1,7 @@
-### Endless Slopes:
+## Endless Slopes:
 
 
-## Description:
+# Description:
 Endless Slopes is a physics-based snowboarding game inspired by Alto's Adventure, created using Python and CMU Graphics.
  Navigate procedurally generated terrain while performing tricks, collecting coins, and avoiding obstacles.
  Experience dynamic weather systems, day-night cycles, and three difficulty modes for varied gameplay.
@@ -15,7 +15,7 @@ Execute newTp.py in your Python editor
 All game assets are included in the code, no additional files needed, make sure the snowboarder image is in hte files too
 
 
-## Game Features:
+# Game Features:
 
 # Controls
 SPACE: Jump (hold longer for higher jumps)
